@@ -5,7 +5,12 @@ This stores the classes used for the text mining project.
 import os
 import requests
 import re
+from nltk.util import ngrams as make_ngrams
+from scipy.sparse import dok_matrix
 
+# define constants
+start_indicator = "*** START OF"
+end_indicator = " ***\n"
 contractions = {
     "aren't": "are not",
     "can't": "cannot",
@@ -70,32 +75,26 @@ class Book:
     """
     A book object stores all relevant information about the book (identified by
     name_author) and provides methods for processing each book's data.
-
-    All attributes:
-    self.name_author - "Book Title, by Author Name"
-    self.path_to_book - "books/path_to_book_text_file"
-    self.words_file_path - "books/path_to_the_book_token_file.txt"
-    self.words - book parsed into a list of words
-    self.hist_file_path - "books/path_to_the_hist_file.txt"
-    self.hist - histogram of book's word usage
     """
 
-    def __init__(self, name_author, gutenberg_index_dict, override_existing_download=False, do_make_book=True):
-        """
-        Downloads the book from project gutenberg if the book is in
-        gutenberg_index. The link to the book is generated from the book's
-        associated number in the gutenberg_index, and is downloaded as a text
-        file. Returns False if the book couldn't be downloaded or already was
-        downloaded (and override_existing_download == False), returns true if
-        the book was successfully downloaded.
-        """
+    def __init__(self, name_author, gutenberg_index_dict, override_existing_download=False, do_make_book=True,
+                 truncate=0.01, n=2, max_chain=10):
         self.name_author = name_author
-        self.tokens = []
         self.book_text = ""
+        self.truncate = truncate
+        self.tokens = []
         self.num_words = 0
+        self.vocabulary = {}
+        self.vocabulary_size = 0
+        self.n = n
+        self.ngrams = [()]
+        self.following_word = {}
+        self.vocab_to_matrix = {}
+
+        self.max_chain = max_chain
+        self.graphs = [None] * self.max_chain
+
         self.path_to_book = os.path.join("cache", "books", self.name_author + ".txt")
-        self.start_indicator = "*** START OF"
-        self.end_indicator = " ***\n"
 
         if os.path.exists(self.path_to_book):  # Check if the book already exists and override it if indicated.
             print("Book file already exists")
@@ -135,12 +134,12 @@ class Book:
             raise InvalidBookError
 
         try:  # if the text has an indicator of where the book starts, this will cut off the header
-            self.book_text = self.book_text.split(self.start_indicator, 1)[1]
+            self.book_text = self.book_text.split(start_indicator, 1)[1]
         except IndexError:
             pass
 
         try:  # if the text has an indicator of where the book ends, this will cut off the part following the end
-            self.book_text = self.book_text.split(self.end_indicator, 1)[0]
+            self.book_text = self.book_text.split(end_indicator, 1)[0]
         except IndexError:
             pass
 
@@ -149,7 +148,7 @@ class Book:
         book_file.close()
         print("Successfully downloaded {} and wrote to file".format(self.name_author))
 
-    def _make_tokens(self, truncate=0.01):
+    def _make_tokens(self):
         """
         Tokenizes a book into a list of words and writes the data as text file
         (data is pickled).
@@ -164,28 +163,64 @@ class Book:
             s = re.sub(contraction, contractions[contraction], s)
         s = re.sub(r'[^a-zA-Z0-9\s]', ' ', s)  # Replace all non alphanumeric characters with spaces
         s = re.sub(' +', ' ', s)  # Replace series of spaces with single space
-
         self.tokens = s.split(" ")
         self.num_words = len(self.tokens)
-        if truncate != 0.:
-            truncate_amt = round(self.num_words * truncate)
+        if self.truncate != 0.:
+            truncate_amt = round(self.num_words * self.truncate)
             self.tokens = self.tokens[truncate_amt:-truncate_amt]
+        if self.tokens.__contains__(""): self.tokens.remove("")  # remove any empty characters
+        self.num_words = len(self.tokens)
 
-    def _make_hist(self):
-        """
-        Makes a hist (in the form of a dictionary) of word frequency usage
-        for the book. Pickles and writes the data to a text file.
-        """
-        # TODO: make histogram of book
-        pass
+    def _make_vocab(self):
+        self.vocabulary = {vocab: 0 for vocab in set(self.tokens)}
+        self.vocabulary_size = len(self.vocabulary)
+        for token in self.tokens: self.vocabulary[token] += 1
+
+    def _make_ngrams(self):
+        self.ngrams = list(make_ngrams(self.tokens, self.n))
+
+    def _make_following_word_dict(self):
+        for vocab in self.vocabulary.keys(): self.following_word[vocab] = set()
+        for ngram in set(self.ngrams): self.following_word[ngram[0]].add(ngram[1])
+
+    def _make_bayesian_graph(self):
+        print('Building graph for {}'.format(self.name_author))
+        self.graphs = []
+        for i in range(self.max_chain):  # each item in self.graphs is a sparse matrix (M) where M[i, j] represents the
+        # value of the directional edge from vocab_to_matrix[i] to vocab_to_matrix[j]; i and j are integers that
+        # correspond to words per the dictionary vocab_to_matrix (populated below) with keys of words and values of
+        # the words' corresponding indices in the matrix
+            self.graphs.append(dok_matrix((self.vocabulary_size, self.vocabulary_size), dtype=int))
+        self.vocab_to_matrix = {}
+        for i, vocab in enumerate(self.vocabulary.keys()):
+            self.vocab_to_matrix[vocab] = i   # record what matrix index corresponds to which word; values are arbitrary
+            # as long as they remain unchanged and are unique to their respective key
+        modulus_number = round(self.num_words / 100)
+        if modulus_number == 0: modulus_number += 1
+        print(self.tokens)
+        for t, token in enumerate(self.tokens):
+            if t % modulus_number == 0: print("progress = {}%".format(round(t/self.num_words * 100)))
+            if self.max_chain + t >= self.num_words: upper_limit = self.num_words - t
+            else: upper_limit = self.max_chain + 1
+            # print('upper limit: ', upper_limit)
+            for c in range(1, upper_limit):  # range from [1, self.max_chain]
+                # print('t: {}, c: {}, x: {}, y: {}, distance: {}'.format(t, c, token, self.tokens[c + t], c))
+                self.graphs[c-1][self.vocab_to_matrix[token], self.vocab_to_matrix[self.tokens[c + t]]] += 1
+        print("Finished building graph for {}".format(self.name_author))
 
     def make_book(self, gutenberg_index):
         """
         Runs all methods that begin with _make
         """
-        for method_name in self.__class__.__dict__:
-            if method_name[:5] == "_make":
-                self.__class__.__dict__[method_name](self)
+        self._make_tokens()
+        self._make_vocab()
+        self._make_ngrams()
+        self._make_following_word_dict()
+        self._make_bayesian_graph()
+
+    def analyze(self):
+
+        pass
 
     def __str__(self):
         return "Book: {} | Book file: {} | Book token file: {} | Book hist file: {}".format(self.name_author,
