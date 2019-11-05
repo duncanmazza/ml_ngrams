@@ -4,6 +4,61 @@ This stores the classes used for the text mining project.
 
 import os
 import requests
+import re
+
+contractions = {
+    "aren't": "are not",
+    "can't": "cannot",
+    "couldn't": "could not",
+    "didn't": "did not",
+    "doesn't": "does not",
+    "don't": "dont",       # Special case to not change; as in: why don't you do something doesn't translate well to why
+    "hadn't": "had not",   #   do not you do something.
+    "hasn't": "has not",
+    "haven't": "have not",
+    "he'd": "he would",
+    "he'll": "he will",
+    "he's": "he is",
+    "i'd": 'i would',
+    "i'll": "i will",
+    "i'm": "i am",
+    "i've": "i have",
+    "isn't": "is not",
+    "let's": "let us",
+    "mightn't": "might not",
+    "mustn't": "must not",
+    "shan't": "shall not",
+    "she'd": "she would",
+    "she'll": "she will",
+    "she's": "she is",
+    "shouldn't": "should not",
+    "that's": "that is",
+    "there's": "there is",
+    "they'd": "they would",
+    "they'll": "they will",
+    "they're": "they are",
+    "they've": "they have",
+    "we'd": "we would",
+    "we're": "we are",
+    "we've": "we have",
+    "weren't": "were not",
+    "what'll": "what will",
+    "what're": "what are",
+    "what's": "what is",
+    "what've": "what have",
+    "where's": "where is",
+    "who'd": "who would",
+    "who'll": "who will",
+    "who're": "who are",
+    "who's": "who is",
+    "who've": "who have",
+    "won't": "will not",
+    "wouldn't": "would not",
+    "you'd": "you would",
+    "you'll": "you will",
+    "you're": "you are",
+    "you've": "you have"
+}
 
 
 class InvalidBookError(Exception):
@@ -63,11 +118,10 @@ class Book:
             print("Book name/author not in the index.")
             raise InvalidBookError
 
-        # TODO: improve
-        book_link_number = book_number + "/"
+        book_link_number = ''
         for i in range(1, len(book_number)):
             # generating the unique part of the download link for the book
-            book_link_number += book_number[i - 1:i] + "/"
+            book_link_number = book_link_number + book_number[i - 1:i] + "/"
         book_link_number = book_link_number + book_number + "/" + book_number + ".txt"
 
         try:
@@ -95,13 +149,27 @@ class Book:
         book_file.close()
         print("Successfully downloaded {} and wrote to file".format(self.name_author))
 
-    def tokenize_book(self):
+    def _make_tokens(self, truncate=0.01):
         """
         Tokenizes a book into a list of words and writes the data as text file
         (data is pickled).
+        @param truncate: remove the first and last `truncate`% words from the book (to ignore things like the title,
+         table of contents, chapters, etc.)
         """
-        # TODO: populate self.tokens
-        pass
+        s = self.book_text
+        s = s.lower()  # Convert to lowercases
+        s = re.sub('\n', ' ', s)  # Replace \n with spaces
+        # remove contractions
+        for contraction in contractions:
+            s = re.sub(contraction, contractions[contraction], s)
+        s = re.sub(r'[^a-zA-Z0-9\s]', ' ', s)  # Replace all non alphanumeric characters with spaces
+        s = re.sub(' +', ' ', s)  # Replace series of spaces with single space
+
+        self.tokens = s.split(" ")
+        self.num_words = len(self.tokens)
+        if truncate != 0.:
+            truncate_amt = round(self.num_words * truncate)
+            self.tokens = self.tokens[truncate_amt:-truncate_amt]
 
     def _make_hist(self):
         """
@@ -111,16 +179,16 @@ class Book:
         # TODO: make histogram of book
         pass
 
-
     def make_book(self, gutenberg_index):
         """
         Runs all methods that begin with _make
         """
-        self.tokenize_book()
         for method_name in self.__class__.__dict__:
             if method_name[:5] == "_make":
                 self.__class__.__dict__[method_name](self)
 
     def __str__(self):
         return "Book: {} | Book file: {} | Book token file: {} | Book hist file: {}".format(self.name_author,
-            self.path_to_book, self.words_file_path, self.hist_file_path)
+                                                                                            self.path_to_book,
+                                                                                            self.words_file_path,
+                                                                                            self.hist_file_path)

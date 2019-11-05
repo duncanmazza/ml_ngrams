@@ -7,12 +7,13 @@ from api.librarian import Librarian
 
 book_list = (
     ('Frankenstein', 'Mary Wollstonecraft (Godwin) Shelley'),
+    ('Watersprings', 'Arthur Christopher Benson'),
 )
 
 if __name__ == "__main__":
     # TODO: add an argument parser
 
-    # acquire book(s) from the book list
+    # acquire books from the book list
     librarian = Librarian(book_list)
-
+    print('test')
 

@@ -88,6 +88,10 @@ class Librarian(HelperFuncs):
                                         # Pull out the index number of the book
                                         book_number = line[len(line) - j:len(line)]
                                         break
+                                try:
+                                    float(book_number)
+                                except ValueError:
+                                    break  # error acquiring the book number
                                 gutenberg_index_dict[book_name_author] = book_number
                                 break
         return gutenberg_index_dict
