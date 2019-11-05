@@ -7,7 +7,6 @@ from api.librarian import Librarian
 
 book_list = (
     ('Frankenstein', 'Mary Wollstonecraft (Godwin) Shelley'),
-    ('Watersprings', 'Arthur Christopher Benson'),
 )
 
 if __name__ == "__main__":
@@ -15,5 +14,5 @@ if __name__ == "__main__":
 
     # acquire books from the book list
     librarian = Librarian(book_list)
-    print('test')
-
+    for book in librarian.acquired_books:
+        book.analyze()
