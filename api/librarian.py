@@ -4,7 +4,7 @@ This contains the functions that book.py and main.py reference
 
 import requests
 import os
-from api import book as cl
+from api.book import Book, InvalidBookError
 import pickle
 import sys
 
@@ -38,7 +38,7 @@ class HelperFuncs:
 
 
 class Librarian(HelperFuncs):
-    def __init__(self, book_list=(('Frankenstein, by Mary Wollstonecraft (Godwin) Shelley')), redownload_index=False,
+    def __init__(self, book_list=(('Frankenstein', 'Mary Wollstonecraft (Godwin) Shelley')), redownload_index=False,
                  use_hardcoded=True, delete_existing_book_folder=False, delete_existing_cache=False,
                  gutindex_info_path=os.path.join(os.getcwd(), "cache", "gutindex_info.bin")):
         HelperFuncs.__init__(self)
@@ -50,10 +50,12 @@ class Librarian(HelperFuncs):
         self.use_hardcoded = use_hardcoded
         self.delete_existing_book_folder = delete_existing_book_folder
         self.delete_existing_cache = delete_existing_cache
-        self.book_list = book_list
+        self.book_list = [", by ".join(book) for book in book_list]
+        self.num_books_requested = len(self.book_list)
+        self.num_books_acquired = 0
         self.gutindex_info_path = gutindex_info_path
 
-        self.library = {}
+        self.acquired_books = {}
         self.gutenberg_index_dict = {}
 
         self.check_folder_exist("cache/", delete_folder_if_exists=self.delete_existing_cache)
@@ -65,7 +67,7 @@ class Librarian(HelperFuncs):
             print("Error handling the index")
             sys.exit(-1)
 
-        self.get_books()
+        self.check_library()
 
     def parse_GUTINDEX_text(self, GUTINDEX_text):
         gutenberg_index_dict = {}
@@ -133,7 +135,7 @@ class Librarian(HelperFuncs):
         GUTINDEX_file.close()
         return True
 
-    def get_books(self, reset_library=True):
+    def check_library(self, reset_library=True):
         """
         This function will prompt the user to either download books from the hard-coded list or to type in the desired
         books by hand. The program will then acquire the books if they haven't already, or if they have, loading them into
@@ -142,10 +144,16 @@ class Librarian(HelperFuncs):
         :param num_texts_plot: either take input of one or two texts
         :return library: a dictionary of the book objects
         """
-        if reset_library: self.library = {}  # reset library dictionary
-        for book_name_author in self.book_list:
+        if reset_library: self.acquired_books = {}  # reset library dictionary
+        for b, book_name_author in enumerate(self.book_list):
             print("Loading {}".format(book_name_author))
-            self.library[book_name_author] = cl.Book(book_name_author, self.gutenberg_index_dict, do_make_book=True)
+            try:
+                self.acquired_books[book_name_author] = Book(book_name_author, self.gutenberg_index_dict)
+            except InvalidBookError:
+                print("Unable to acquire {}")
+                if b != self.num_books_requested - 1:
+                    print("Will try to acquire the next book...")
+        self.num_books_acquired = len(self.acquired_books)
 
 
 if __name__ == "__main__":
