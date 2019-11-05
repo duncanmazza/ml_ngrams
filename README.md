@@ -1,2 +1,3 @@
 ## Probabilistic Machine Learning Module Mini-Project
-TODO
+
+Cite https://arxiv.org/pdf/1803.00985.pdf
