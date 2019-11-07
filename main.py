@@ -8,13 +8,12 @@ from api.librarian import Librarian
 book_list = (
     ('Frankenstein', 'Mary Wollstonecraft (Godwin) Shelley'),
     # ('Watersprings', 'Arthur Christopher Benson')
+    # ... any other book in Project Gutenberg
 )
 
 if __name__ == "__main__":
-    # TODO: add an argument parser
-
     # acquire books from the book list
-    librarian = Librarian(book_list, global_truncate=0.4, global_alpha=1, global_max_chain=15)
+    librarian = Librarian(book_list, global_truncate=0.4, global_alpha=1, global_max_chain=2)
     while True:
         for book_name in librarian.acquired_books:
             book = librarian.acquired_books[book_name]
@@ -25,4 +24,4 @@ if __name__ == "__main__":
         while True:
             i = input()
             if i == "y" or "Y":
-                break   
+                break
