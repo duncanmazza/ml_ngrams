@@ -5,8 +5,8 @@ This stores the classes used for the text mining project.
 import os
 import requests
 import re
-from nltk.util import ngrams as make_ngrams
 from scipy.sparse import dok_matrix
+import numpy as np
 
 # define constants
 start_indicator = "*** START OF"
@@ -17,8 +17,8 @@ contractions = {
     "couldn't": "could not",
     "didn't": "did not",
     "doesn't": "does not",
-    "don't": "dont",       # Special case to not change; as in: why don't you do something doesn't translate well to why
-    "hadn't": "had not",   #   do not you do something.
+    "don't": "dont",  # Special case to not change; as in: why don't you do something doesn't translate well to why
+    "hadn't": "had not",  # do not you do something.
     "hasn't": "has not",
     "haven't": "have not",
     "he'd": "he would",
@@ -78,21 +78,22 @@ class Book:
     """
 
     def __init__(self, name_author, gutenberg_index_dict, override_existing_download=False, do_make_book=True,
-                 truncate=0.01, n=2, max_chain=10):
+                 truncate=0.01, n=2, max_chain=10, alpha=1):
         self.name_author = name_author
         self.book_text = ""
         self.truncate = truncate
         self.tokens = []
         self.num_words = 0
-        self.vocabulary = {}
         self.vocabulary_size = 0
         self.n = n
-        self.ngrams = [()]
-        self.following_word = {}
-        self.vocab_to_matrix = {}
-
+        self.alpha = alpha
         self.max_chain = max_chain
         self.graphs = [None] * self.max_chain
+
+        self.vocabulary = dict()
+        self.following_word = dict()
+        self.vocab_to_matrix = dict()
+        self.sum_w_d_p_list_s_cache = dict()
 
         self.path_to_book = os.path.join("cache", "books", self.name_author + ".txt")
 
@@ -133,20 +134,31 @@ class Book:
             print("Invalid url / could not download from this link")
             raise InvalidBookError
 
-        try:  # if the text has an indicator of where the book starts, this will cut off the header
-            self.book_text = self.book_text.split(start_indicator, 1)[1]
-        except IndexError:
-            pass
+        # if the text has an indicator of where the book starts, this will cut off the header
+        if self.book_text.__contains__(start_indicator):
+            self.book_text= self.book_text.split(start_indicator, 1)[1]
 
-        try:  # if the text has an indicator of where the book ends, this will cut off the part following the end
+        # if the text has an indicator of where the book ends, this will cut off the part following the end
+        if self.book_text.__contains__(end_indicator):
             self.book_text = self.book_text.split(end_indicator, 1)[0]
-        except IndexError:
-            pass
+
 
         book_file = open(self.path_to_book, 'w')
         book_file.write(self.book_text)
         book_file.close()
         print("Successfully downloaded {} and wrote to file".format(self.name_author))
+
+    @staticmethod
+    def _parse(s):
+        s = s.lower()  # Convert to lowercases
+        s = re.sub('\n', ' ', s)  # Replace \n with spaces
+        # remove contractions
+        for contraction in contractions:
+            s = re.sub(contraction, contractions[contraction], s)
+        s = re.sub("'", '', s)  # delete all apostrophes
+        s = re.sub(r'[^a-zA-Z0-9\s]', ' ', s)  # Replace all non alphanumeric characters with spaces
+        s = re.sub(' +', ' ', s)  # Replace series of spaces with single space
+        return s.split(" ")
 
     def _make_tokens(self):
         """
@@ -156,14 +168,7 @@ class Book:
          table of contents, chapters, etc.)
         """
         s = self.book_text
-        s = s.lower()  # Convert to lowercases
-        s = re.sub('\n', ' ', s)  # Replace \n with spaces
-        # remove contractions
-        for contraction in contractions:
-            s = re.sub(contraction, contractions[contraction], s)
-        s = re.sub(r'[^a-zA-Z0-9\s]', ' ', s)  # Replace all non alphanumeric characters with spaces
-        s = re.sub(' +', ' ', s)  # Replace series of spaces with single space
-        self.tokens = s.split(" ")
+        self.tokens = self._parse(s)
         self.num_words = len(self.tokens)
         if self.truncate != 0.:
             truncate_amt = round(self.num_words * self.truncate)
@@ -176,54 +181,145 @@ class Book:
         self.vocabulary_size = len(self.vocabulary)
         for token in self.tokens: self.vocabulary[token] += 1
 
-    def _make_ngrams(self):
-        self.ngrams = list(make_ngrams(self.tokens, self.n))
-
     def _make_following_word_dict(self):
         for vocab in self.vocabulary.keys(): self.following_word[vocab] = set()
-        for ngram in set(self.ngrams): self.following_word[ngram[0]].add(ngram[1])
+        for t in range(self.num_words-1): self.following_word[self.tokens[t]].add(self.tokens[t+1])
 
-    def _make_bayesian_graph(self):
+    def _make_bayesian_graphs(self):
+        """
+        Build the list of bayesian graphs, where the graph at index i represents the directional graph between words in
+        the text vector (self.tokens), where the nodes are vocabulary words and the directional edges are the number of
+        occurrences of the parent node separated by the child node by distance i in the text.
+        :return: void
+        """
         print('Building graph for {}'.format(self.name_author))
         self.graphs = []
-        for i in range(self.max_chain):  # each item in self.graphs is a sparse matrix (M) where M[i, j] represents the
-        # value of the directional edge from vocab_to_matrix[i] to vocab_to_matrix[j]; i and j are integers that
-        # correspond to words per the dictionary vocab_to_matrix (populated below) with keys of words and values of
-        # the words' corresponding indices in the matrix
+        for i in range(self.max_chain):
             self.graphs.append(dok_matrix((self.vocabulary_size, self.vocabulary_size), dtype=int))
         self.vocab_to_matrix = {}
-        for i, vocab in enumerate(self.vocabulary.keys()):
-            self.vocab_to_matrix[vocab] = i   # record what matrix index corresponds to which word; values are arbitrary
-            # as long as they remain unchanged and are unique to their respective key
-        modulus_number = round(self.num_words / 100)
-        if modulus_number == 0: modulus_number += 1
-        print(self.tokens)
+        for i, vocab in enumerate(self.vocabulary.keys()): self.vocab_to_matrix[
+            vocab] = i  # record what matrix index corresponds to which word; values are arbitrary as long as they
+        # remain unchanged and are unique to their respective key
+
         for t, token in enumerate(self.tokens):
-            if t % modulus_number == 0: print("progress = {}%".format(round(t/self.num_words * 100)))
-            if self.max_chain + t >= self.num_words: upper_limit = self.num_words - t
-            else: upper_limit = self.max_chain + 1
-            # print('upper limit: ', upper_limit)
-            for c in range(1, upper_limit):  # range from [1, self.max_chain]
-                # print('t: {}, c: {}, x: {}, y: {}, distance: {}'.format(t, c, token, self.tokens[c + t], c))
-                self.graphs[c-1][self.vocab_to_matrix[token], self.vocab_to_matrix[self.tokens[c + t]]] += 1
-        print("Finished building graph for {}".format(self.name_author))
+
+            # enable the last `self.max_chain` words in the text serve as the basis for the search window by shortening
+            # the search window so that it doesn't overextend the list of words
+            if not self.max_chain + t >= self.num_words:
+                upper_limit = self.max_chain + 1
+            else:
+                upper_limit = self.num_words - t
+
+            for c in range(1, upper_limit):  # iterate over search window
+                self.graphs[c - 1][self.vocab_to_matrix[token], self.vocab_to_matrix[self.tokens[c + t]]] += 1
+        print("Finished building graph for {}\n".format(self.name_author))
+
+    def query_graph(self, d, _from, _to):
+        """
+        Returns the value of the directional edge from _from to _to in graph d, where d is the distance value associated
+        with the graph. If there is no edge (an edge will exist if its value is >= 1), then 0 is returned
+        :param d: distance
+        :param _from: start node
+        :param _to: end node
+        :return: edge value
+        """
+        return self.graphs[d][self.vocab_to_matrix[_from], self.vocab_to_matrix[_to]]
 
     def make_book(self, gutenberg_index):
         """
         Runs all methods that begin with _make
+        :return: void
         """
         self._make_tokens()
         self._make_vocab()
-        self._make_ngrams()
         self._make_following_word_dict()
-        self._make_bayesian_graph()
+        self._make_bayesian_graphs()
 
-    def analyze(self):
+    def _p_s(self, _s):
+        """
+        :param _s: word in book vocabulary
+        :return: p(s) where p(s) = (number of occurances of s) / (number of words in book)
+        """
+        return self.vocabulary[_s] / self.num_words
 
-        pass
+    def _p_d_i_j(self, d, _p, _s, tuple_s):
+        """
+        Returns p^d(i, j)
+        :param d: distance
+        :param _p: previous word
+        :param _j: suggested word
+        :param tuple_s: tuple of all possible suggested words
+        :return: (wight of graph d from _p to _s) / (sum of wights of graph d from _p to all list_s); if the denominator
+         is 0, then return 0 to avoid dividing by 0
+        """
+        val_w_d_p_s = self.query_graph(d, _p, _s)
+        # first, check caches for whether these values have already been queried
+        val_sum_w_d_p_list_s = self.sum_w_d_p_list_s_cache.get((d, _p, tuple_s))
+        if val_sum_w_d_p_list_s is None:
+            val_sum_w_d_p_list_s = 0
+            for _s_ in tuple_s: val_sum_w_d_p_list_s += self.query_graph(d, _p, _s_)
+            self.sum_w_d_p_list_s_cache[
+                (d, _p, tuple_s)] = val_sum_w_d_p_list_s  # store so that this calculation isn't redone
+        if val_sum_w_d_p_list_s == 0:  # return 0 to avoid dividing by 0
+            return 0
+        else:
+            return val_w_d_p_s / val_sum_w_d_p_list_s
+
+    def generate_cond_prob_arr(self, tuple_s, list_p_forward):
+        """
+        :param tuple_s: list of unique suggested words (order is arbitrary but must be maintained so words can
+         correspond to values in cond_prob_arr)
+        :param list_p_rev: (ordered) list of previous words preceding suggested word
+        :return: numpy array of length len(list_s_set) that contains the conditional probabilities
+        """
+        cond_prob_arr = np.zeros((len(tuple_s)))
+
+        # calculate create an array that has the previous words in reverse order
+        list_p_rev = [list_p_forward[p] for p in range(len(list_p_forward) - 1, -1, -1)]
+
+        # iterate over the suggested words
+        for j, _s in enumerate(tuple_s):
+            prior_val = self._p_s(_s)
+            likelihood_arr = np.ones((len(list_p_rev))) * self.alpha  # initialize with alpha value
+            for i in range(len(list_p_rev)):
+                likelihood_arr[i] += self._p_d_i_j(i, list_p_rev[i], _s, tuple_s)
+            log_sum_likelihood_val = np.sum(np.log(likelihood_arr))  # TODO: divide by something for laplace smoothing?
+            cond_prob_arr[j] = np.exp(np.log(prior_val + self.alpha) + log_sum_likelihood_val)
+
+        return cond_prob_arr / np.sum(cond_prob_arr)  # normalize so values sum to 1
+
+    def limit_s_to(self, length, list_s):
+        len_list_s = len(list_s)
+        if len_list_s > length:
+            random_idx = np.random.randint(0, len_list_s - length, length)
+            return list(np.array(list_s)[random_idx])
+        else:
+            return list_s
+
+    def apply_naive_bayes(self, extend_by=20):
+        starting_idx = np.random.randint(0, self.num_words - self.max_chain)
+        seed = self.tokens[starting_idx:self.max_chain + starting_idx]
+        actual_sentence = self.tokens[starting_idx:starting_idx + extend_by + self.max_chain]
+        generated_sentence = seed.copy()
+        i = 0
+        while (i < extend_by):
+            list_p_forward = generated_sentence[len(generated_sentence) - self.max_chain:]  # ascending
+            # query all words that follow the most recent previous word in the text, and procure a simple random sample
+            # of these suggested words if there are more than 100
+            list_s = self.limit_s_to(1000, list(self.following_word[list_p_forward[-1]]))
+            for prev_word in list_p_forward[-2:]:
+                if list_s.__contains__(prev_word) and len(list_s) > 1: list_s.remove(prev_word)  # disallow a word to be
+                # repeated  within the last two previous words, while ensuring that there are a nonzero number of
+                # suggested words
+            cond_prob_arr = self.generate_cond_prob_arr(tuple(list_s), list_p_forward)
+            next_word = str(list_s[np.random.choice(np.array(range(0, len(list_s))), size=1, p=cond_prob_arr)[0]])
+            generated_sentence.append(next_word)
+            i += 1
+
+        print('--------\nSeed:\n"{}..."\nGenerated sentence:\n"{}"\nActual:\n"{}"\n'.format(" ".join(seed),
+                                                                                            " ".join(
+                                                                                                generated_sentence),
+                                                                                            " ".join(actual_sentence)))
 
     def __str__(self):
-        return "Book: {} | Book file: {} | Book token file: {} | Book hist file: {}".format(self.name_author,
-                                                                                            self.path_to_book,
-                                                                                            self.words_file_path,
-                                                                                            self.hist_file_path)
+        return "Book: {}\nBook text file: {} ".format(self.name_author, self.path_to_book)
