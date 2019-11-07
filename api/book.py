@@ -7,6 +7,7 @@ import requests
 import re
 from scipy.sparse import dok_matrix
 import numpy as np
+import matplotlib.pyplot as plt
 
 # define constants
 start_indicator = "*** START OF"
@@ -237,6 +238,7 @@ class Book:
 
     def _p_s(self, _s):
         """
+        Returns P(s)
         :param _s: word in book vocabulary
         :return: p(s) where p(s) = (number of occurances of s) / (number of words in book)
         """
@@ -244,7 +246,7 @@ class Book:
 
     def _p_d_i_j(self, d, _p, _s, tuple_s):
         """
-        Returns p^d(i, j)
+        Returns P^d(i, j)
         :param d: distance
         :param _p: previous word
         :param _j: suggested word
@@ -317,9 +319,58 @@ class Book:
             i += 1
 
         print('--------\nSeed:\n"{}..."\nGenerated sentence:\n"{}"\nActual:\n"{}"\n'.format(" ".join(seed),
-                                                                                            " ".join(
-                                                                                                generated_sentence),
-                                                                                            " ".join(actual_sentence)))
+            " ".join(generated_sentence), " ".join(actual_sentence)))
+
+        self.analyze_result(generated_sentence[self.max_chain:], actual_sentence[self.max_chain:])
+
+    def analyze_result(self, post_seed_generated, post_seed_actual):
+        conjoined_vocab = list(set(post_seed_actual + post_seed_generated))
+        conjoined_vocab.sort(key=lambda x: -self.vocabulary[x])
+        conjoined_vocab_loc = {}
+        for i, vocab in enumerate(conjoined_vocab):
+            conjoined_vocab_loc[vocab] = i
+        len_conjoined_vocab = len(conjoined_vocab)
+        _generated_count = np.zeros(len_conjoined_vocab)
+        _actual_vocab_count= np.zeros(len_conjoined_vocab)
+
+        for word in post_seed_generated:
+            _generated_count[conjoined_vocab_loc[word]] += 1
+        for word in post_seed_actual:
+            _actual_vocab_count[conjoined_vocab_loc[word]] += 1
+
+        _generated_count /= np.sum(_generated_count)
+        _actual_vocab_count /= np.sum(_actual_vocab_count)
+
+        x = np.arange(len_conjoined_vocab)  # the label locations
+        width = 0.35  # the width of the bars
+
+        fig, ax = plt.subplots()
+        ax.bar(x - width / 2, _generated_count, width, label='Post-seed Generated')
+        ax.bar(x + width / 2, _actual_vocab_count, width, label='Post-seed Actual')
+
+        # Add some text for labels, title and custom x-axis tick labels, etc.
+        ax.set_ylabel('Frequency')
+        ax.set_title('Frequency of Generated vs. Actual Words in Markov Chain and Book Excerpt Respectively (sorted '
+                     'left-to-right from most-frequent to least frequent in the whole text body)\n')
+        ax.set_xticks(x)
+        ax.set_xticklabels(conjoined_vocab)
+        ax.legend()
+
+        fig.tight_layout()
+        fig.set_size_inches(15, 7)
+        plt.xticks(rotation=90)
+        ax.legend(loc='lower left', bbox_to_anchor=(0.0, 1.01), ncol=2, borderaxespad=0, frameon=False)
+        plt.show()
+
+    @staticmethod
+    def autolabel(rects, ax):
+        """
+        Attach a text label above each bar in *rects*, displaying its height
+        """
+        for rect in rects:
+            height = rect.get_height()
+            ax.annotate('{}'.format(height), xy=(rect.get_x() + rect.get_width() / 2, height), xytext=(0, 3),
+                        textcoords="offset points", ha='center', va='bottom')
 
     def __str__(self):
         return "Book: {}\nBook text file: {} ".format(self.name_author, self.path_to_book)
