@@ -5,6 +5,7 @@ Usage:
 ```bash
 git clone https://github.com/duncanmazza/ml_ngrams.git
 cd ml_ngrams/
+pip install requirements.txt
 python main.py
 ```
 
