@@ -17,7 +17,7 @@ if __name__ == "__main__":
     while True:
         for book_name in librarian.acquired_books:
             book = librarian.acquired_books[book_name]
-            print("Appling naive bayes to: {}".format(book_name))
+            print("Applying naive bayes to: {}".format(book_name))
             book.apply_naive_bayes(extend_by=15)
 
         print('Generate another sample? (y or Y) -> ')
