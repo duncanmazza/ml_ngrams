@@ -9,5 +9,7 @@ pip install requirements.txt
 python main.py
 ```
 
+Edit the books hard-coded in `main.py` to change which text the model is trained on.
+
 #### Known issues:
 The file GUTINDEX.txt does not download properly, and is thus included by default in the repository until this issue is resolved; by design, the `cache/` directory should exist exclusively locally.
