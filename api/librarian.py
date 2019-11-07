@@ -40,7 +40,8 @@ class HelperFuncs:
 class Librarian(HelperFuncs):
     def __init__(self, book_list=(('Frankenstein', 'Mary Wollstonecraft (Godwin) Shelley')), redownload_index=False,
                  use_hardcoded=True, delete_existing_book_folder=False, delete_existing_cache=False,
-                 gutindex_info_path=os.path.join(os.getcwd(), "cache", "gutindex_info.bin")):
+                 gutindex_info_path=os.path.join(os.getcwd(), "cache", "gutindex_info.bin"), global_truncate=0.4,
+                 global_alpha=1, global_max_chain=10):
         HelperFuncs.__init__(self)
         # Hard coding conditions that the text parser will use:
         self.skip_line_if = [" ", "~", "TITLE"]
@@ -54,6 +55,11 @@ class Librarian(HelperFuncs):
         self.num_books_requested = len(self.book_list)
         self.num_books_acquired = 0
         self.gutindex_info_path = gutindex_info_path
+
+        # hyperparameters to pass on to all book objects
+        self.global_truncate = global_truncate
+        self.global_alpha = global_alpha
+        self.global_max_chain = global_max_chain
 
         self.acquired_books = {}
         self.gutenberg_index_dict = {}
@@ -152,9 +158,11 @@ class Librarian(HelperFuncs):
         for b, book_name_author in enumerate(self.book_list):
             print("Loading {}".format(book_name_author))
             try:
-                self.acquired_books[book_name_author] = Book(book_name_author, self.gutenberg_index_dict)
+                self.acquired_books[book_name_author] = Book(book_name_author, self.gutenberg_index_dict,
+                                                             truncate=self.global_truncate, alpha=self.global_alpha,
+                                                             max_chain=self.global_max_chain)
             except InvalidBookError:
-                print("Unable to acquire {}")
+                print("Unable to acquire {} (InvalidBookError raised)")
                 if b != self.num_books_requested - 1:
                     print("Will try to acquire the next book...")
         self.num_books_acquired = len(self.acquired_books)
